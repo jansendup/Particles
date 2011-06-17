@@ -1,14 +1,11 @@
-#include <CL/cl.h>
-#include <CL/cl_gl.h>
 #include <stdio.h>
 #include <malloc.h>
 
 #include "opengl.h"
 #include "OCL.h"
-#define UTIL_GL_SHARING
 #include "util.h"
-
-#define NUM_PARTICLES 10000
+#include <CL/cl.h>
+#include <CL/cl_gl.h>
 
 OCL::OCL(void)
 {
@@ -19,6 +16,8 @@ OCL::OCL(void)
 	commandQueue = 0;
 	program = 0;
 	
+	buffersSize = 0;
+
 	cl_static_pos = cl_static_vel = 0;
 
 	cl_velocities = 0;
@@ -64,7 +63,7 @@ bool OCL::InitializeContext()
 	printf("Got platform...\n");
 	oclPrintPlatformInfo(platformId);
 
-	if( !oclGetSomeGPUDevice(&deviceId, platformId, false) )
+	if( !oclGetSomeGPUDevice(&deviceId, platformId) )
 	{
 		printf("Failed to get a GPU device\n");
 		return false;
@@ -72,7 +71,7 @@ bool OCL::InitializeContext()
 	printf("Got GPU device...\n");
 	oclPrintDeviceInfo(deviceId);
 
-	if( !oclCreateSomeContext(&context, deviceId, platformId, false) )
+	if( !oclCreateSomeContext(&context, deviceId, platformId) )
 	{
 		printf("Failed to create cl context\n");
 		return false;
@@ -142,7 +141,7 @@ bool OCL::LoadData(Vector4* pos, Vector4* vel, Vector4* col, int size)
 		printf("Failed to load data. OpenCL context not initialized. \n");
 		return false;
 	}
-	int buffersSize = sizeof(Vector4) * size;
+	buffersSize = sizeof(Vector4) * size;
 
 	printf("Creating OpenGL buffers...\n");
 	vbo_pos = oglCreateVBO(pos, buffersSize, GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW);
@@ -175,7 +174,47 @@ bool OCL::LoadData(Vector4* pos, Vector4* vel, Vector4* col, int size)
 		return false;
 	}
 
-	
+	cl_velocities = clCreateBuffer(context, CL_MEM_READ_WRITE, buffersSize, NULL, &error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to create cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+	cl_static_pos = clCreateBuffer(context, CL_MEM_READ_WRITE, buffersSize, NULL, &error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to create cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+	cl_static_vel = clCreateBuffer(context, CL_MEM_READ_WRITE, buffersSize, NULL, &error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to create cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+
+	printf("Writing data to GPU memory...\n");
+
+	error = clEnqueueWriteBuffer(commandQueue,cl_velocities, CL_TRUE, 0, buffersSize, vel, 0, NULL, NULL);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to write to cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+	error = clEnqueueWriteBuffer(commandQueue,cl_static_vel, CL_TRUE, 0, buffersSize, vel, 0, NULL, NULL);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to write to cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+	error = clEnqueueWriteBuffer(commandQueue,cl_static_pos, CL_TRUE, 0, buffersSize, pos, 0, NULL, NULL);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to write to cl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+
+	clFinish(commandQueue);
 }
 
 bool OCL::BuildExecutable()
@@ -209,10 +248,10 @@ bool OCL::BuildExecutable()
 	return true;
 }
 
-bool OCL::Run()
+bool OCL::CreateKernel()
 {
 	cl_int error;
-	printf("Runnig program on GPU...\n");
+	printf("Creating kernel...\n");
 
 	if(!initialized)
 	{
@@ -221,7 +260,7 @@ bool OCL::Run()
 	}
 
 	// Create kernel
-	kernel = clCreateKernel(program, "Test", &error);
+	kernel = clCreateKernel(program, "updateParticles", &error);
 
 	if(error != CL_SUCCESS)
 	{
@@ -229,83 +268,81 @@ bool OCL::Run()
 		return false;
 	}
 
-	// Create arrays
-	float *a = new float [num];
-	float *b = new float [num];
-	for(int i = 0; i < num; i++)
-	{
-		a[i] = i;
-		b[i] = i;
-	}
-
-	// Create buffers
-	cl_a = clCreateBuffer(context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) *num, a, &error);
-	if(error != CL_SUCCESS)
-	{
-		printf("Failed to create buffer a with error code %d(%s)\n",error, oclErrorString(error));
-		return false;
-	}
-	cl_b = clCreateBuffer(context,CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) *num, a, &error);
-	if(error != CL_SUCCESS)
-	{
-		printf("Failed to create buffer b with error code %d(%s)\n",error, oclErrorString(error));
-		return false;
-	}
-	cl_c = clCreateBuffer(context,CL_MEM_WRITE_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) *num, a, &error);
-	if(error != CL_SUCCESS)
-	{
-		printf("Failed to create buffer c with error code %d(%s)\n",error, oclErrorString(error));
-		return false;
-	}
-
 	// Set kernel arguments
-	error = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*)&cl_a);
+	error = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*)&cl_glReferances[0]);
 	if(error != CL_SUCCESS)
 	{
-		printf("Failed to set kernel arguments with error code %d(%s)\n",error, oclErrorString(error));
+		printf("Failed to set kernel argument 0 with error code %d(%s)\n",error, oclErrorString(error));
 		return false;
 	}
-	error = clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*)&cl_b);
+	error = clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*)&cl_glReferances[1]);
 	if(error != CL_SUCCESS)
 	{
-		printf("Failed to set kernel arguments with error code %d(%s)\n",error, oclErrorString(error));
+		printf("Failed to set kernel argument 1 with error code %d(%s)\n",error, oclErrorString(error));
 		return false;
 	}
-	error = clSetKernelArg(kernel, 2, sizeof(cl_mem), (void*)&cl_c);
+	error = clSetKernelArg(kernel, 2, sizeof(cl_mem), (void*)&cl_velocities);
 	if(error != CL_SUCCESS)
 	{
-		printf("Failed to set kernel arguments with error code %d(%s)\n",error, oclErrorString(error));
+		printf("Failed to set kernel argument 2 with error code %d(%s)\n",error, oclErrorString(error));
 		return false;
 	}
+	error = clSetKernelArg(kernel, 3, sizeof(cl_mem), (void*)&cl_static_pos);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to set kernel arguments 3 with error code %d(%s)\n",error, oclErrorString(error));
+		return false;
+	}
+	error = clSetKernelArg(kernel, 4, sizeof(cl_mem), (void*)&cl_static_vel);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to set kernel argument 4 with error code %d(%s)\n",error, oclErrorString(error));
+		return false;
+	}
+	float dt = 0.01f;
+	error = clSetKernelArg(kernel, 5, sizeof(float), (void*)&dt);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to set kernel argument 5 with error code %d(%s)\n",error, oclErrorString(error));
+		return false;
+	}
+	return true;
+}
+
+bool OCL::Run()
+{
+	cl_int error;
+	printf("Runnig program on GPU...\n");
 
 	// Makes sure queue is empty
 	clFinish(commandQueue);
-
+	glFinish();
 	cl_event event;
-	error = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,(size_t*)&num,NULL,0,NULL, &event);
+	error = clEnqueueAcquireGLObjects(commandQueue,2,cl_glReferances,0,NULL,&event);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to acquire GL objects with error code %d(%s)\n",error, oclErrorString(error));
+		return false;
+	}
+	clFinish(commandQueue);
+
+	//error = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,(size_t*)&buffersSize,NULL,0,NULL, &event); // Another source of problem. Won't allow clEnqueueReleaseGLObjects after excution.
 	if(error != CL_SUCCESS)
 	{
 		printf("Failed to execute kernel with error code %d(%s)\n",error, oclErrorString(error));
-		return false;
+		//return false;
 	}
 	clReleaseEvent(event);
-
-	float* c_done = new float [num];
-	error = clEnqueueReadBuffer(commandQueue,cl_c,CL_TRUE,0, sizeof(float) * num, c_done, 0, NULL, &event);
+	clFinish(commandQueue);
+	error = clEnqueueReleaseGLObjects(commandQueue,2,cl_glReferances,0, NULL, &event); // Source of problem
 	if(error != CL_SUCCESS)
 	{
-		printf("Failed to read buffer c with error code %d(%s)\n",error, oclErrorString(error));
+		printf("Failed to release GL Objects with error code %d(%s)\n",error, oclErrorString(error));
+		clFinish(commandQueue);
 		return false;
 	}
-	clReleaseEvent(event);
 
-	for(int i = 0; i < num; i++)
-	{
-		printf("c_done[%d] = %g\n",i, c_done[i]);
-	}
+	clFinish(commandQueue);
 
-	delete[] a;
-	delete[] b;
-	delete[] c_done;
 	return true;
 }

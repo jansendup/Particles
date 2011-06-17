@@ -1,7 +1,7 @@
 #pragma once
 #include <CL/cl.h>
 #include <Windows.h>
-#include <GL/gl.h>
+#include "opengl.h"
 
 typedef struct vector4_type
 {
@@ -27,7 +27,18 @@ public:
 	bool InitializeContext();
 	bool LoadProgram(const char* file);
 	bool LoadData(Vector4* pos, Vector4* vel, Vector4* col, int size);
+	bool CreateKernel();
 	bool Run();
+
+	// Static buffers
+	cl_mem cl_static_pos, cl_static_vel;
+
+	// Dynamic buffers
+	cl_mem cl_velocities;
+	GLuint vbo_pos, vbo_color;
+	cl_mem cl_glReferances[2];
+	bool initialized;
+
 private:
 	bool BuildExecutable();
 
@@ -38,13 +49,7 @@ private:
 	cl_program program;
 	cl_kernel kernel;
 
-	// Static buffers
-	cl_mem cl_static_pos, cl_static_vel;
-
-	// Dynamic buffers
-	cl_mem cl_velocities;
-	GLuint vbo_pos, vbo_color;
-	cl_mem cl_glReferances[2];
-	bool initialized;
+	int buffersSize;
+	
 };
 

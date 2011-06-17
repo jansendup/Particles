@@ -10,8 +10,8 @@
 
 #ifdef UTIL_GL_SHARING
 #define GL_INTEROP
-#include <CL/cl_gl.h>
 #include "opengl.h"
+#include <CL/cl_gl.h>
 
 
 #if defined (__APPLE__) || defined(MACOSX)
@@ -269,7 +269,7 @@ bool oclCreateSomeContext(cl_context* context , cl_device_id deviceId,cl_platfor
 		0
 	};
 
-	*context = clCreateContext(props, 1, &deviceId, createContextErrorFeedback, NULL, &error);
+	*context = clCreateContext(props, 1, &deviceId, NULL, NULL, &error);
 	if(error != CL_SUCCESS)
 	{
 		printf("Failed to create shared gl-cl context with error code %d (%s)\n", error, oclErrorString(error));
