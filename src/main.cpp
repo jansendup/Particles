@@ -71,7 +71,7 @@ int main(int argc, char** argv)
         float x = rad*sin(2*3.14 * i/num);
         float z = 0.0f;// -.1 + .2f * i/num;
         float y = rad*cos(2*3.14 * i/num);
-        pos[i] = Vector4(x, y, z, 1.0f);
+		pos[i][0] = x; pos[i][1] = y; pos[i][2] = z; pos[i][3] = 1.0f;
         
         //give some initial velocity
         //float xr = rand_float(-.1, .1);
@@ -79,10 +79,10 @@ int main(int argc, char** argv)
         //the life is the lifetime of the particle: 1 = alive 0 = dead
         //as you will see in part2.cl we reset the particle when it dies
         float life_r = rand_float(0.f, 1.f);
-        vel[i] = Vector4(0.0, 0.0, 3.0f, life_r);
+		vel[i][0] = 0; vel[i][1] = 0; vel[i][2] = 3.0f; vel[i][3] = life_r;
 
         //just make them red and full alpha
-        color[i] = Vector4(1.0f, 0.0f,0.0f, 1.0f);
+        color[i][0] = 1; color[i][1] = 0; color[i][2] = 0; color[i][3] = 1;
     }
 
     //our load data function sends our initial values to the GPU
@@ -92,6 +92,7 @@ int main(int argc, char** argv)
     
     //this starts the GLUT program, from here on out everything we want
     //to do needs to be done in glut callback functions
+	printf("Runnig program on GPU...\n");
     glutMainLoop();
 END:
 	system("pause");

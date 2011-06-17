@@ -142,6 +142,7 @@ bool OCL::LoadData(Vector4* pos, Vector4* vel, Vector4* col, int size)
 		return false;
 	}
 	buffersSize = sizeof(Vector4) * size;
+	printf("Sizeof(Vector4) = %d\n", sizeof(Vector4));
 
 	printf("Creating OpenGL buffers...\n");
 	vbo_pos = oglCreateVBO(pos, buffersSize, GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW);
@@ -312,11 +313,11 @@ bool OCL::CreateKernel()
 bool OCL::Run()
 {
 	cl_int error;
-	printf("Runnig program on GPU...\n");
 
 	// Makes sure queue is empty
-	clFinish(commandQueue);
 	glFinish();
+	clFinish(commandQueue);
+	
 	cl_event event;
 	error = clEnqueueAcquireGLObjects(commandQueue,2,cl_glReferances,0,NULL,&event);
 	if(error != CL_SUCCESS)
@@ -324,17 +325,19 @@ bool OCL::Run()
 		printf("Failed to acquire GL objects with error code %d(%s)\n",error, oclErrorString(error));
 		return false;
 	}
-	clFinish(commandQueue);
-
-	//error = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,(size_t*)&buffersSize,NULL,0,NULL, &event); // Another source of problem. Won't allow clEnqueueReleaseGLObjects after excution.
+	clReleaseEvent(event);
+	//clFinish(commandQueue);
+	size_t s = buffersSize / sizeof(Vector4);
+	error = clEnqueueNDRangeKernel(commandQueue,kernel,1,NULL,(size_t*)&s ,NULL,0,NULL, &event); // Another source of problem. Won't allow clEnqueueReleaseGLObjects after excution.
 	if(error != CL_SUCCESS)
 	{
 		printf("Failed to execute kernel with error code %d(%s)\n",error, oclErrorString(error));
 		//return false;
 	}
 	clReleaseEvent(event);
-	clFinish(commandQueue);
+	//clFinish(commandQueue);
 	error = clEnqueueReleaseGLObjects(commandQueue,2,cl_glReferances,0, NULL, &event); // Source of problem
+	clReleaseEvent(event);
 	if(error != CL_SUCCESS)
 	{
 		printf("Failed to release GL Objects with error code %d(%s)\n",error, oclErrorString(error));

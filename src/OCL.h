@@ -3,20 +3,7 @@
 #include <Windows.h>
 #include "opengl.h"
 
-typedef struct vector4_type
-{
-	float x,y,z,w;
-
-	vector4_type(){};
-	vector4_type(float _x, float _y, float _z, float _w = 1.0f)
-	{
-		x = _x;
-		y = _y;
-		z = _z;
-		w = _w;
-	}
-	
-} Vector4;
+typedef float Vector4[4];
 
 class OCL
 {
