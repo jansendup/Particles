@@ -1,8 +1,14 @@
-#include "OCL.h"
 #include <CL/cl.h>
-#include "util.h"
+#include <CL/cl_gl.h>
 #include <stdio.h>
 #include <malloc.h>
+
+#include "opengl.h"
+#include "OCL.h"
+#define UTIL_GL_SHARING
+#include "util.h"
+
+#define NUM_PARTICLES 10000
 
 OCL::OCL(void)
 {
@@ -12,9 +18,11 @@ OCL::OCL(void)
 	context = 0;
 	commandQueue = 0;
 	program = 0;
-	cl_a = 0;
-	cl_b = 0;
-	cl_c = 0;
+	
+	cl_static_pos = cl_static_vel = 0;
+
+	cl_velocities = 0;
+	vbo_pos = vbo_color = 0;
 }
 
 
@@ -30,12 +38,16 @@ OCL::~OCL(void)
 			clReleaseProgram(program);
 		if(kernel)
 			clReleaseKernel(kernel);
-		if(cl_a)
-			clReleaseMemObject(cl_a);
-		if(cl_b)
-			clReleaseMemObject(cl_b);
-		if(cl_c)
-			clReleaseMemObject(cl_c);
+		if(cl_static_pos)
+			clReleaseMemObject(cl_static_pos);
+		if(cl_static_vel)
+			clReleaseMemObject(cl_static_vel);
+		if(cl_velocities)
+			clReleaseMemObject(cl_velocities);
+		if(vbo_pos)
+			glDeleteBuffers(1, &vbo_pos);
+		if(vbo_color)
+			glDeleteBuffers(1, &vbo_pos);
 	}
 }
 
@@ -121,6 +133,51 @@ bool OCL::LoadProgram(const char* file)
 	return true;
 }
 
+bool OCL::LoadData(Vector4* pos, Vector4* vel, Vector4* col, int size)
+{
+	cl_int error;
+	printf("Loading data...\n");
+	if(!initialized)
+	{
+		printf("Failed to load data. OpenCL context not initialized. \n");
+		return false;
+	}
+	int buffersSize = sizeof(Vector4) * size;
+
+	printf("Creating OpenGL buffers...\n");
+	vbo_pos = oglCreateVBO(pos, buffersSize, GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW);
+	if(!vbo_pos)
+	{
+		printf("Failed to create positions vbo.\n");
+		return false;
+	}
+	vbo_color = oglCreateVBO(col, buffersSize, GL_ARRAY_BUFFER, GL_DYNAMIC_DRAW);
+	if(!vbo_color)
+	{
+		printf("Failed to create colors vbo.\n");
+		return false;
+	}
+	glFinish(); // Wait for gl opperations to finish.
+
+	// Create referances of the OpenGL buffers
+	printf("Referencing OpenGL buffers to OpenCL buffers...\n");
+	
+	cl_glReferances[0] = clCreateFromGLBuffer(context,CL_MEM_READ_WRITE,vbo_pos,&error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to referance gl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+	cl_glReferances[1] = clCreateFromGLBuffer(context,CL_MEM_READ_WRITE,vbo_color,&error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to referance gl buffer with error code %d(%s)\n", error, oclErrorString(error));
+		return false;
+	}
+
+	
+}
+
 bool OCL::BuildExecutable()
 {
 	cl_int error;
@@ -173,7 +230,6 @@ bool OCL::Run()
 	}
 
 	// Create arrays
-	int num = 100;
 	float *a = new float [num];
 	float *b = new float [num];
 	for(int i = 0; i < num; i++)

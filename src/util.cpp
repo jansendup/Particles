@@ -1,31 +1,18 @@
 //#include <math.h>
-#define GL_INTEROP
 #include <stdio.h>
 //#include <stdlib.h>
 #include <string>
 #include <string.h>
 
 #include <CL/cl.h>
-#include <CL/cl_gl.h>
+
 #include "util.h"
 
-/*#ifdef _WIN32
-#  define WINDOWS_LEAN_AND_MEAN
-#  define NOMINMAX
-#  include <windows.h>
-#endif*/
+#ifdef UTIL_GL_SHARING
+#define GL_INTEROP
+#include <CL/cl_gl.h>
+#include "opengl.h"
 
-// OpenGL Graphics Includes
-#include <GL/glew.h>
-#if defined (__APPLE__) || defined(MACOSX)
-#include <OpenGL/OpenGL.h>
-#include <GLUT/glut.h>
-#else
-#include <GL/freeglut.h>
-#ifdef UNIX
-#include <GL/glx.h>
-#endif
-#endif
 
 #if defined (__APPLE__) || defined(MACOSX)
 #define GL_SHARING_EXTENSION "cl_APPLE_gl_sharing"
@@ -41,8 +28,7 @@
 #include <GL/glx.h>
 #endif
 #endif
-
-void createContextErrorFeedback(const char* errinfo, const void *private_info, size_t cb, void* user_data);
+#endif
 
 char *read_file(const char *filename, int *length)
 {
@@ -66,6 +52,27 @@ char *read_file(const char *filename, int *length)
 	return (char*)buffer;
 }
 
+#ifdef UTIL_GL_SHARING
+GLuint oglCreateVBO(const void* data, int dataSize, GLenum target, GLenum usage)
+{
+	GLuint vbo;
+	glGenBuffers(1,&vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(target, dataSize, data, usage);
+
+	int bufferSize = 0;
+	glGetBufferParameteriv(target, GL_BUFFER_SIZE, &bufferSize);
+	if( dataSize != bufferSize )
+	{
+		printf("No memmory allocated for gl buffer.\n");
+		glDeleteBuffers(1, &vbo);
+		vbo = 0;
+	}
+	
+	glBindBuffer(target, 0); // Unbind buffer
+	return vbo;
+}
+#endif
 
 bool oclGetNVIDIAPlatform(cl_platform_id* clSelectedPlatformID)
 {
@@ -132,7 +139,7 @@ bool oclGetNVIDIAPlatform(cl_platform_id* clSelectedPlatformID)
 	return true;
 }
 
-bool oclGetSomeGPUDevice(cl_device_id* deviceId , cl_platform_id platformId, bool glSharing)
+bool oclGetSomeGPUDevice(cl_device_id* deviceId , cl_platform_id platformId)
 {
 	cl_uint deviceCount;
 	cl_int error;
@@ -160,138 +167,127 @@ bool oclGetSomeGPUDevice(cl_device_id* deviceId , cl_platform_id platformId, boo
 		return false;
 	}
 
-	if(glSharing)
+#ifdef UTIL_GL_SHARING
+	// Search for device that supports context sharing.
+	bool foundDevice = false;
+	int deviceIndex;
+	for(int i = 0; i < deviceCount; i++)
 	{
-		// Search for device that supports context sharing.
-		bool foundDevice = false;
-		int deviceIndex;
-		for(int i = 0; i < deviceCount; i++)
+		size_t extensionsSize;
+
+		// Get size of extensions
+		error = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, 0, NULL, &extensionsSize);
+		if(error != CL_SUCCESS)
 		{
-			size_t extensionsSize;
+			printf("Failed to get device extensions size with error code %d (%s)\n",error, oclErrorString(error));
+			continue;
+		}
 
-			// Get size of extensions
-			error = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, 0, NULL, &extensionsSize);
-			if(error != CL_SUCCESS)
-			{
-				printf("Failed to get device extensions size with error code %d (%s)\n",error, oclErrorString(error));
-				continue;
-			}
-
-			// Get extensions
-			char* extensions = (char*)malloc(extensionsSize);
-			error = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, extensionsSize, extensions, NULL);
-			if(error != CL_SUCCESS)
-			{
-				printf("Failed to get device extensions with error code %d (%s)\n",error, oclErrorString(error));
-				free(extensions);
-				continue;
-			}
-
-			// Check if the extensions contains the GL_SHARING_EXTENSION
-			if( strstr(extensions,GL_SHARING_EXTENSION) != NULL )
-			{
-				foundDevice = true;
-				deviceIndex = i;
-				free(extensions);
-				break;
-			}
+		// Get extensions
+		char* extensions = (char*)malloc(extensionsSize);
+		error = clGetDeviceInfo(devices[i], CL_DEVICE_EXTENSIONS, extensionsSize, extensions, NULL);
+		if(error != CL_SUCCESS)
+		{
+			printf("Failed to get device extensions with error code %d (%s)\n",error, oclErrorString(error));
 			free(extensions);
+			continue;
 		}
 
-		if(!foundDevice)
+		// Check if the extensions contains the GL_SHARING_EXTENSION
+		if( strstr(extensions,GL_SHARING_EXTENSION) != NULL )
 		{
-			printf("Couldn't find a GPU device supporting \"%s\"\n", GL_SHARING_EXTENSION);
-			return false;
+			foundDevice = true;
+			deviceIndex = i;
+			free(extensions);
+			break;
 		}
+		free(extensions);
+	}
 
-		*deviceId = devices[deviceIndex];
-	}
-	else
+	if(!foundDevice)
 	{
-		*deviceId = devices[0];
+		printf("Couldn't find a GPU device supporting \"%s\"\n", GL_SHARING_EXTENSION);
+		return false;
 	}
+
+	*deviceId = devices[deviceIndex];
+#else
+	*deviceId = devices[0];
+#endif
 
 	free(devices);
 	return true;
 }
 
-bool oclCreateSomeContext(cl_context* context , cl_device_id deviceId,cl_platform_id platformId, bool glSharing)
+bool oclCreateSomeContext(cl_context* context , cl_device_id deviceId,cl_platform_id platformId)
 {
 	cl_int error = 0;
-	if(glSharing)
-	{
-		// Define OS-specific context properties and create the OpenCL context
+
+#ifdef UTIL_GL_SHARING
+	// Define OS-specific context properties and create the OpenCL context
 #if defined (__APPLE__)
-		CGLContextObj kCGLContext = CGLGetCurrentContext();
-		CGLShareGroupObj kCGLShareGroup = CGLGetShareGroup(kCGLContext);
-		if( kCGLContext == NULL)
-			printf("CGLGetCurrentContext() returned NULL\n");
-		if( kCGLShareGroup == NULL)
-			printf("CGLGetShareGroup(kCGLContext) returned NULL\n");
-		cl_context_properties props[] = 
-		{
-			CL_CONTEXT_PROPERTY_USE_CGL_SHAREGROUP_APPLE, (cl_context_properties)kCGLShareGroup, 
-			0 
-		};
-		cxGPUContext = clCreateContext(props, 0,0, NULL, NULL, &ciErrNum);
+	CGLContextObj kCGLContext = CGLGetCurrentContext();
+	CGLShareGroupObj kCGLShareGroup = CGLGetShareGroup(kCGLContext);
+	if( kCGLContext == NULL)
+		printf("CGLGetCurrentContext() returned NULL\n");
+	if( kCGLShareGroup == NULL)
+		printf("CGLGetShareGroup(kCGLContext) returned NULL\n");
+	cl_context_properties props[] = 
+	{
+		CL_CONTEXT_PROPERTY_USE_CGL_SHAREGROUP_APPLE, (cl_context_properties)kCGLShareGroup, 
+		0 
+	};
+	cxGPUContext = clCreateContext(props, 0,0, NULL, NULL, &ciErrNum);
 #else
 #ifdef UNIX
-		GLXContext glxContext = glXGetCurrentContext();
-		Display* display = glXGetCurrentDisplay();
-		if(glxContext == NULL)
-			printf("glXGetCurrentContext() returned NULL\n");
-		if(display == NULL)
-			printf("glXGetCurrentDisplay() returned NULL\n");
-		cl_context_properties props[] = 
-		{
-			CL_GL_CONTEXT_KHR, (cl_context_properties)glxContext, 
-			CL_GLX_DISPLAY_KHR, (cl_context_properties)display, 
-			CL_CONTEXT_PLATFORM, (cl_context_properties)cpPlatform, 
-			0
-		};
-		cxGPUContext = clCreateContext(props, 1, &cdDevices[uiDeviceUsed], NULL, NULL, &ciErrNum);
-#else // Win32
-		HGLRC wglContext = wglGetCurrentContext();
-		HDC wglDC = wglGetCurrentDC();
-		if(wglContext == NULL)
-			printf("wglGetCurrentContext() returned NULL\n");
-		if(wglDC == NULL)
-			printf("wglGetCurrentDC() returned NULL\n");
-		cl_context_properties props[] = 
-		{
-			CL_GL_CONTEXT_KHR, (cl_context_properties)wglContext, 
-			CL_WGL_HDC_KHR, (cl_context_properties)wglDC, 
-			CL_CONTEXT_PLATFORM, (cl_context_properties)platformId, 
-			0
-		};
-
-		*context = clCreateContext(props, 1, &deviceId, createContextErrorFeedback, NULL, &error);
-		if(error != CL_SUCCESS)
-		{
-			printf("Failed to create shared gl-cl context with error code %d (%s)\n", error, oclErrorString(error));
-			return false;
-		}
-#endif
-#endif
-	}
-	else
+	GLXContext glxContext = glXGetCurrentContext();
+	Display* display = glXGetCurrentDisplay();
+	if(glxContext == NULL)
+		printf("glXGetCurrentContext() returned NULL\n");
+	if(display == NULL)
+		printf("glXGetCurrentDisplay() returned NULL\n");
+	cl_context_properties props[] = 
 	{
-		*context = clCreateContext(NULL, 1, &deviceId, NULL, NULL, &error);
-		if(error != CL_SUCCESS)
-		{
-			printf("Failed to create cl context with error code %d (%s)\n", error, oclErrorString(error));
-			return false;
-		}
+		CL_GL_CONTEXT_KHR, (cl_context_properties)glxContext, 
+		CL_GLX_DISPLAY_KHR, (cl_context_properties)display, 
+		CL_CONTEXT_PLATFORM, (cl_context_properties)cpPlatform, 
+		0
+	};
+	cxGPUContext = clCreateContext(props, 1, &cdDevices[uiDeviceUsed], NULL, NULL, &ciErrNum);
+#else // Win32
+	HGLRC wglContext = wglGetCurrentContext();
+	HDC wglDC = wglGetCurrentDC();
+	if(wglContext == NULL)
+		printf("wglGetCurrentContext() returned NULL\n");
+	if(wglDC == NULL)
+		printf("wglGetCurrentDC() returned NULL\n");
+	cl_context_properties props[] = 
+	{
+		CL_GL_CONTEXT_KHR, (cl_context_properties)wglContext, 
+		CL_WGL_HDC_KHR, (cl_context_properties)wglDC, 
+		CL_CONTEXT_PLATFORM, (cl_context_properties)platformId, 
+		0
+	};
+
+	*context = clCreateContext(props, 1, &deviceId, createContextErrorFeedback, NULL, &error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to create shared gl-cl context with error code %d (%s)\n", error, oclErrorString(error));
+		return false;
 	}
+#endif
+#endif
+
+#else
+	*context = clCreateContext(NULL, 1, &deviceId, NULL, NULL, &error);
+	if(error != CL_SUCCESS)
+	{
+		printf("Failed to create cl context with error code %d (%s)\n", error, oclErrorString(error));
+		return false;
+	}
+#endif
 	return true;
 }
-
-void createContextErrorFeedback(const char* errinfo, const void *private_info, size_t cb, void* user_data)
-{
-	printf("Notify");
-	printf(errinfo);
-}
-
 
 // Helper function to get error string
 // *********************************************************************
